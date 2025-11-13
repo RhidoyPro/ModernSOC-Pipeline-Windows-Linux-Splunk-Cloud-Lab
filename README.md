@@ -1,79 +1,103 @@
-Modern SOC Home Lab – Windows 11, Ubuntu, Kali & Splunk Cloud
+# Modern SOC Home Lab – Windows 11, Ubuntu, Kali & Splunk Cloud
 
-Author: Tashfiqul Rhidoy Prodhan
-Role: Cybersecurity Student | SOC & Blue Team Enthusiast
+**Author:** Tashfiqul Rhidoy Prodhan  
+**Role:** Cybersecurity Student · SOC / Blue Team Enthusiast
 
-A modern home SOC pipeline demonstrating real attack detection using:
+A small home SOC pipeline demonstrating **real attack telemetry** (Nmap from Kali → Windows 11) being collected and detected in **Splunk Cloud**.
 
-Kali Linux (attacker)
+## Stack
 
-Windows 11 (host: prodhan) with Sysmon + Splunk Universal Forwarder
+- **Kali Linux** – attacker VM (runs Nmap scan)
+- **Windows 11 ARM** (host: `prodhan`) – victim workstation  
+  - Sysmon64 (SwiftOnSecurity config)  
+  - Splunk Universal Forwarder (Windows x64)
+- **Ubuntu 24.04 LTS** (host: `server`) – log forwarder  
+  - Splunk Universal Forwarder (linux-arm64)
+- **Splunk Cloud** – SIEM / log analytics
+- **VMware Fusion on macOS** – virtualization platform
 
-Ubuntu 24.04 (host: server) with Splunk Universal Forwarder
+> All VMs share the same NAT network: `192.168.106.0/24`.
 
-Splunk Cloud as the SIEM
+---
 
-VMware Fusion on macOS for virtualization
+## Lab Architecture
 
-Goal: Generate real attack telemetry (Nmap scan from Kali → Windows) and detect it in Splunk Cloud using Sysmon + Windows Event Logs.
+```text
+macOS (host)
+└── VMware Fusion
+    ├── Kali Linux (Attacker)
+    │   └── Nmap scan → Windows 11
+    ├── Windows 11 ARM (Victim)
+    │   ├── Sysmon64 + SwiftOnSecurity config
+    │   └── Splunk Universal Forwarder (Win x64)
+    └── Ubuntu 24.04 (Log Forwarder)
+        └── Splunk Universal Forwarder (linux-arm64)
 
-Lab Architecture
-macOS
-│
-├── VMware Fusion
-│   ├── Kali Linux (Attacker)
-│   │     - Nmap scan against Windows victim
-│   │
-│   ├── Windows 11 ARM (Victim)
-│   │     - Sysmon64 installed
-│   │     - Splunk Universal Forwarder (Windows x64)
-│   │
-│   └── Ubuntu 24.04 (Log Forwarder)
-│         - Splunk Universal Forwarder (linux-arm64)
-│
-└── Splunk Cloud (SIEM)
-      - Receives logs from Windows + Ubuntu
-
-
-All VMs share a NAT subnet: 192.168.106.0/24
-
+Splunk Cloud (SIEM)
+└── Receives logs from:
+    ├── Windows 11 (WinEventLog:* via UF)
+    └── Ubuntu 24.04 (_internal + OS logs via UF)
 1. Ubuntu → Splunk Cloud
-Install Splunk UF on Ubuntu
+1.1 Install Splunk Universal Forwarder (Ubuntu)
 sudo dpkg -i splunkforwarder-10.0.1-c486717c322b-linux-arm64.deb
+
 sudo /opt/splunkforwarder/bin/splunk start --accept-license
 
-Add Splunk Cloud as forward-server
-sudo /opt/splunkforwarder/bin/splunk add forward-server <SPLUNK_CLOUD_FQDN>:9997 -auth admin:Prodhan1738
+1.2 Connect Ubuntu UF to Splunk Cloud
+sudo /opt/splunkforwarder/bin/splunk add forward-server \
+  <SPLUNK_CLOUD_FQDN>:9997 \
+  -auth admin:Prodhan1738
 
-Enable log monitoring
+
+Replace <SPLUNK_CLOUD_FQDN> with your Splunk Cloud URL
+(e.g. prd-p-21wpj.splunkcloud.com).
+
+1.3 Verify monitored paths
 sudo /opt/splunkforwarder/bin/splunk list monitor
 
 
-Result: Ubuntu logs appear in Splunk Cloud → _internal index.
+Expected result: Ubuntu host server appears in Splunk Cloud _internal index, with UF logs and host telemetry.
 
 2. Windows 11 → Splunk Cloud
-Installed Sysmon (SwiftOnSecurity config)
-
+2.1 Install Sysmon (SwiftOnSecurity config)
 sysmon64.exe -accepteula -i sysmonconfig.xml
 
-Install Splunk UF (Windows x64)
+2.2 Install Splunk Universal Forwarder (Windows x64)
 
-Installed using PowerShell:
+From elevated PowerShell:
 
-Invoke-WebRequest -Uri "https://download.splunk.com/products/universalforwarder/releases/10.0.1/windows/splunkforwarder-10.0.1-c486717c322b-windows-x64.msi" -OutFile "$env:USERPROFILE\Downloads\splunkuf.msi"
-Start-Process "$env:USERPROFILE\Downloads\splunkuf.msi" -Wait
+# Download MSI
+$Url     = "https://download.splunk.com/products/universalforwarder/releases/10.0.1/windows/splunkforwarder-10.0.1-c486717c322b-windows-x64.msi"
+$OutFile = "$env:USERPROFILE\Downloads\splunkuf.msi"
+
+Invoke-WebRequest -Uri $Url -OutFile $OutFile
+
+# Launch installer
+Start-Process $OutFile -Wait
 
 
-Created admin user:
+During install, create the UF local admin:
+
 Username: admin
-Password: Prodhan1738
 
-Add Splunk Cloud as forward-server
+Password: Prodhan1738 (lab-only; change in real life!)
+
+2.3 Point UF at Splunk Cloud
+
+In an Administrator Command Prompt, go to the Splunk UF bin folder:
+
+cd "C:\Program Files\SplunkUniversalForwarder\bin"
+
 splunk.exe add forward-server <SPLUNK_CLOUD_FQDN>:9997 -auth admin:Prodhan1738
 
-Enable Windows Event Logs
+2.4 Enable Windows Event Logs
 
-C:\Program Files\SplunkUniversalForwarder\etc\system\local\inputs.conf:
+Edit:
+
+C:\Program Files\SplunkUniversalForwarder\etc\system\local\inputs.conf
+
+
+Add:
 
 [WinEventLog://Security]
 index = main
@@ -85,73 +109,108 @@ index = main
 index = main
 
 
-Restart UF:
+Restart the UF:
 
 splunk.exe restart
 
 
-Result: WinEventLog:* events appear in Splunk Cloud under index main.
+Expected result: WinEventLog:* events from host prodhan appear in the main index in Splunk Cloud.
 
 3. Kali Linux Attack (Nmap → Windows)
-Windows IP
+3.1 Find the Windows 11 IP
 
-Example:
-192.168.106.135
+On Windows (inside the VM):
 
-Nmap scan
+ipconfig
+
+
+Example output:
+
+IPv4 Address . . . . . . . . . . : 192.168.106.135
+
+3.2 Run Nmap from Kali
+
+On Kali:
+
 sudo nmap -sS 192.168.106.135
 
 
-Open ports discovered:
-135, 139, 445, 5357…
+Typical open ports discovered:
 
-Result: Sysmon + Security logs generated on Windows → forwarded to Splunk Cloud → visible in WinEventLog:Security/System.
+135/tcp – msrpc
+
+139/tcp – netbios-ssn
+
+445/tcp – microsoft-ds
+
+5357/tcp – wsdapi
+
+Effect: This scan generates Windows Security + Sysmon network events, which the Splunk UF forwards to Splunk Cloud.
 
 4. Splunk Cloud Detection
 
-Search:
+In Search & Reporting:
 
 index=main host="prodhan" sourcetype="WinEventLog:*"
 
 
-Findings:
+You should see:
 
-Sysmon logs for network connections
+Security log events (e.g. EventCode=5379)
 
-Windows Security EventCode 5379
+System / Application log noise from the host
 
-Windows System + Application logs
+Entries that line up with the Nmap scan time window
 
-Nmap scan activity clearly visible
+You can tighten the search to security logs only:
+
+index=main host="prodhan" sourcetype="WinEventLog:Security"
+
+
+For Ubuntu UF internal logs:
+
+index=_internal host="server"
 
 5. Screenshots
 
-A folder named /screenshots/ contains:
+The repo contains a screenshots/ folder with key figures:
 
-Figure 1 – Kali Nmap scan
+Figure 1 – Kali Linux Nmap scan against Windows 11 victim
 
-Figure 2 – Windows 11 logs reaching Splunk Cloud
+Figure 2 – Splunk Cloud search showing WinEventLog:* from host prodhan (Windows 11)
 
-Figure 3 – Ubuntu UF internal logs
+Figure 3 – Splunk _internal index events from Ubuntu forwarder host server
 
-Figure 4 – Ubuntu monitored log list
+Figure 4 – Ubuntu Splunk UF listing monitored log files
 
-Figure 5 – Splunk Cloud telemetry (two hosts connected)
+Figure 5 – Splunk Cloud internal telemetry showing both forwarders connected
 
-Figure 6 – Ubuntu UF service running
+Figure 6 – Ubuntu Splunk UF service running and healthy
 
-Summary
+These screenshots visually prove the end-to-end pipeline:
 
-This home SOC lab demonstrates:
+Kali ➜ Windows 11 ➜ Splunk UF ➜ Splunk Cloud.
 
-Log forwarding from Ubuntu + Windows
+6. Summary
 
-Sysmon deployment
+This lab demonstrates a modern SOC-style telemetry pipeline:
 
-Splunk Universal Forwarder configuration
+Windows + Linux hosts sending logs via Splunk Universal Forwarder
 
-Nmap attack simulation
+Sysmon deployment with a realistic config
 
-Successful detection in Splunk Cloud
+Kali Nmap attack against a Windows victim
 
-A complete end-to-end Windows → Linux → SIEM pipeline proving real SOC workflow skills.
+Successful detection of the activity in Splunk Cloud
+
+It’s a compact project you can show to recruiters as proof that you:
+
+Can build and wire up a small SIEM pipeline
+
+Understand Windows logging (Security, System, Application, Sysmon)
+
+Know how to simulate attacks and validate detections
+
+
+If you want, next step I can help you add a tiny **“How to run this lab”** section at the top with 3–4 bullets, but this version should already look clean and professional on GitHub.
+::contentReference[oaicite:1]{index=1}
